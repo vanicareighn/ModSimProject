@@ -1,0 +1,809 @@
+import random
+from time import sleep
+import tkinter as tk
+from tkinter import ttk, messagebox
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import numpy as np
+from math import cos, sin, pi
+
+class TrafficSimulator:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Traffic Flow Simulator")
+        
+        # Make window maximized but keep taskbar visible
+        # Get screen dimensions
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        
+        # Adjust height to account for taskbar (typically 40-50 pixels)
+        taskbar_height = 50
+        window_height = screen_height - taskbar_height
+        
+        # Set window size and position
+        self.root.geometry(f"{screen_width}x{window_height}+0+0")
+        self.root.state('zoomed')  # This will maximize but keep taskbar visible
+        self.root.resizable(True, True)  # Allow resizing
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # Set minimum size
+        self.root.minsize(800, 600)
+        self.root.configure(bg='#f0f0f0')
+
+        # Create main container with responsive margins
+        self.main_container = ttk.Frame(self.root)
+        self.main_container.pack(fill='both', expand=True, padx=40, pady=30)
+
+        # Traffic solution options with efficiency and cost
+        self.traffic_options = {
+            "Traffic Lights": {
+                "id": "traffic_lights",
+                "efficiency": 0.8,  
+                "cost": 2500000,      # PHP cost for traffic light system
+                "description": "Traditional traffic lights with timer system and backup power",
+                "wait_time": 45,     
+                "maintenance_cost": 100000  # Annual maintenance in PHP
+            },
+            "Redesigned Lanes": {
+                "id": "redesigned_lanes",
+                "efficiency": 1.2,   
+                "cost": 7500000,      # PHP cost for lane reconstruction
+                "description": "Optimized lane layout with dedicated turn lanes and improved signage",
+                "wait_time": 30,
+                "maintenance_cost": 200000
+            },
+            "Roundabout": {
+                "id": "roundabout",
+                "efficiency": 1.0,    
+                "cost": 10000000,     # PHP cost for roundabout construction
+                "description": "Modern roundabout with yield signs and proper lighting",
+                "wait_time": 20,
+                "maintenance_cost": 300000
+            },
+            "Smart Traffic System": {
+                "id": "smart_system",
+                "efficiency": 1.4,    
+                "cost": 15000000,     # PHP cost for smart system
+                "description": "AI-powered traffic management with CCTV and sensors",
+                "wait_time": 15,
+                "maintenance_cost": 500000
+            },
+            "Overpass Bridge": {
+                "id": "overpass",
+                "efficiency": 1.6,    
+                "cost": 25000000,     # PHP cost for overpass
+                "description": "Elevated road structure with proper drainage system",
+                "wait_time": 10,
+                "maintenance_cost": 800000
+            },
+            "Underground Tunnel": {
+                "id": "tunnel",
+                "efficiency": 1.5,    
+                "cost": 40000000,     # PHP cost for tunnel
+                "description": "Underground passage with ventilation and emergency systems",
+                "wait_time": 5,
+                "maintenance_cost": 1000000
+            }
+        }
+
+        # Add animation properties
+        self.animation_speed = 50  # milliseconds between frames
+        self.vehicle_size = 6
+        self.road_width = 40
+        self.vehicles = []
+        self.is_animating = False
+
+        self.setup_gui()
+
+    def setup_gui(self):
+        # Create notebook for tabs with styling
+        style = ttk.Style()
+        style.configure('TNotebook', padding=(20, 10))
+        style.configure('TNotebook.Tab', padding=(10, 5))
+        
+        self.notebook = ttk.Notebook(self.main_container)
+        self.notebook.pack(fill='both', expand=True)
+
+        # Simulation tab with padding
+        sim_frame = ttk.Frame(self.notebook, padding="30")
+        self.notebook.add(sim_frame, text="Simulation")
+
+        # Results tab with scrollbar
+        results_container = ttk.Frame(self.notebook, padding="30")
+        self.notebook.add(results_container, text="Results")
+        
+        # Add scrollbar to results with better spacing
+        results_canvas = tk.Canvas(results_container)
+        scrollbar = ttk.Scrollbar(results_container, orient="vertical", 
+                                command=results_canvas.yview)
+        self.results_frame = ttk.Frame(results_canvas, padding="20")
+        
+        self.results_frame.bind(
+            "<Configure>",
+            lambda e: results_canvas.configure(scrollregion=results_canvas.bbox("all"))
+        )
+        
+        results_canvas.create_window((0, 0), window=self.results_frame, anchor="nw")
+        results_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Add padding around scrollbar
+        scrollbar.pack(side="right", fill="y", padx=(5, 0))
+        results_canvas.pack(side="left", fill="both", expand=True)
+
+        # Setup simulation controls
+        self.setup_simulation_controls(sim_frame)
+
+        # Add Animation tab
+        animation_container = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(animation_container, text="Animation")
+
+        # Create canvas for animation
+        self.canvas_frame = ttk.Frame(animation_container)
+        self.canvas_frame.pack(fill='both', expand=True)
+        
+        self.canvas = tk.Canvas(self.canvas_frame, 
+                              width=500, 
+                              height=500, 
+                              bg='#E0E0E0')
+        self.canvas.pack(padx=10, pady=10)
+
+        # Create control panel with better layout
+        control_frame = ttk.LabelFrame(animation_container, text="Animation Controls", padding="10")
+        control_frame.pack(fill='x', pady=10, padx=10)
+        
+        # Speed control
+        speed_frame = ttk.Frame(control_frame)
+        speed_frame.pack(fill='x', pady=5)
+        
+        ttk.Label(speed_frame, text="Animation Speed:", 
+                 font=('Helvetica', 9)).pack(side='left', padx=5)
+        self.speed_var = tk.DoubleVar(value=1.0)
+        speed_scale = ttk.Scale(speed_frame, 
+                              from_=0.1, 
+                              to=2.0, 
+                              variable=self.speed_var,
+                              orient='horizontal')
+        speed_scale.pack(side='left', fill='x', expand=True, padx=5)
+        
+        # Button frame for animation controls
+        button_frame = ttk.Frame(control_frame)
+        button_frame.pack(fill='x', pady=5)
+        
+        # Create control buttons
+        self.pause_btn = ttk.Button(button_frame, 
+                                  text="Pause", 
+                                  command=self.toggle_pause,
+                                  state='disabled',
+                                  style='Control.TButton')
+        self.pause_btn.pack(side='left', padx=5)
+        
+        self.stop_btn = ttk.Button(button_frame, 
+                                 text="Stop", 
+                                 command=self.stop_simulation,
+                                 state='disabled',
+                                 style='Control.TButton')
+        self.stop_btn.pack(side='left', padx=5)
+        
+        # Add replay button to animation controls
+        self.replay_btn = ttk.Button(button_frame,
+                                   text="Play Simulation Again",
+                                   command=self.replay_simulation,
+                                   state='disabled',
+                                   style='Control.TButton')
+        
+        # Status label
+        self.status_var = tk.StringVar(value="Waiting for simulation...")
+        status_label = ttk.Label(control_frame, 
+                               textvariable=self.status_var,
+                               font=('Helvetica', 9, 'italic'))
+        status_label.pack(pady=(5,0))
+        
+        # Style for control buttons
+        style = ttk.Style()
+        style.configure('Control.TButton', 
+                       font=('Helvetica', 9),
+                       padding=5)
+
+        # Setup the intersection layout
+        self.setup_intersection()
+        
+        # Add paused state variable
+        self.is_paused = False
+
+    def validate_number_input(self, P):
+        # Allow empty field or only digits
+        if P == "" or P.isdigit():
+            return True
+        return False
+
+    def setup_simulation_controls(self, frame):
+        # Create container for better spacing
+        content_frame = ttk.Frame(frame)
+        content_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+        # Register validation command
+        validate_cmd = self.root.register(self.validate_number_input)
+
+        # Title with adaptive spacing
+        title_label = ttk.Label(content_frame, text="Traffic Flow Simulator", 
+                              font=('Helvetica', 16, 'bold'))
+        title_label.pack(pady=(0, 15))
+
+        # Traffic solution selection with compact spacing
+        solution_frame = ttk.Frame(content_frame)
+        solution_frame.pack(fill='x', pady=(0, 10))
+        
+        ttk.Label(solution_frame, text="Select Traffic Solution:", 
+                 font=('Helvetica', 10, 'bold')).pack(anchor='w')
+        self.solution_var = tk.StringVar()
+        solution_combo = ttk.Combobox(solution_frame, textvariable=self.solution_var, 
+                                    values=list(self.traffic_options.keys()), 
+                                    state='readonly', width=35,
+                                    font=('Helvetica', 9))
+        solution_combo.pack(fill='x', pady=(2, 0))
+        solution_combo.set("Select an option")
+        solution_combo.bind('<<ComboboxSelected>>', self.update_solution_info)
+
+        # Solution information display with compact height
+        self.info_text = tk.Text(content_frame, height=4, width=45, wrap=tk.WORD,
+                               font=('Helvetica', 9))
+        self.info_text.pack(pady=(2, 10), fill='x')
+        self.info_text.config(state=tk.DISABLED)
+
+        # Traffic parameters frame with compact spacing
+        params_frame = ttk.LabelFrame(content_frame, text="Traffic Parameters", 
+                                    padding="10",
+                                    style='Custom.TLabelframe')
+        params_frame.pack(fill='x', pady=(0, 10))
+
+        # Vehicles per minute input with compact layout
+        vehicles_frame = ttk.Frame(params_frame)
+        vehicles_frame.pack(fill='x', pady=2)
+        ttk.Label(vehicles_frame, text="Vehicles per minute:", 
+                 font=('Helvetica', 9)).pack(side='left')
+        self.vehicles_var = tk.StringVar()
+        vehicles_entry = ttk.Entry(vehicles_frame, textvariable=self.vehicles_var,
+                                 validate='key',
+                                 validatecommand=(validate_cmd, '%P'),
+                                 width=12,
+                                 font=('Helvetica', 9))
+        vehicles_entry.pack(side='right')
+
+        # Simulation time input with compact layout
+        time_frame = ttk.Frame(params_frame)
+        time_frame.pack(fill='x', pady=2)
+        ttk.Label(time_frame, text="Simulation time (minutes):", 
+                 font=('Helvetica', 9)).pack(side='left')
+        self.time_var = tk.StringVar()
+        time_entry = ttk.Entry(time_frame, textvariable=self.time_var,
+                             validate='key',
+                             validatecommand=(validate_cmd, '%P'),
+                             width=12,
+                             font=('Helvetica', 9))
+        time_entry.pack(side='right')
+
+        # Peak hour toggle with compact spacing
+        self.peak_hour_var = tk.BooleanVar()
+        peak_hour_check = ttk.Checkbutton(params_frame, 
+                                        text="Peak Hour Traffic", 
+                                        variable=self.peak_hour_var,
+                                        style='Custom.TCheckbutton')
+        peak_hour_check.pack(pady=5)
+
+        # Progress bar frame
+        progress_frame = ttk.Frame(content_frame)
+        progress_frame.pack(fill='x', pady=5)
+        
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(progress_frame, 
+                                          variable=self.progress_var,
+                                          maximum=100,
+                                          style='Custom.Horizontal.TProgressbar')
+        self.progress_bar.pack(fill='x', pady=2)
+
+        # Results display with compact wraplength
+        self.result_var = tk.StringVar()
+        result_label = ttk.Label(content_frame, 
+                               textvariable=self.result_var,
+                               wraplength=400,
+                               font=('Helvetica', 9),
+                               justify='left')
+        result_label.pack(pady=5)
+
+        # Create frame for simulation buttons
+        self.sim_buttons_frame = ttk.Frame(content_frame)
+        self.sim_buttons_frame.pack(pady=5)
+        
+        # Create main simulation button (initially hidden)
+        self.simulate_btn = ttk.Button(self.sim_buttons_frame, 
+                                     text="Start Simulation",
+                                     command=self.start_simulation,
+                                     style='Custom.TButton')
+        
+        # Style configurations
+        style = ttk.Style()
+        style.configure('Custom.TButton', 
+                       font=('Helvetica', 10, 'bold'),
+                       padding=5)
+        style.configure('Custom.TCheckbutton', 
+                       font=('Helvetica', 9))
+        style.configure('Custom.TLabelframe.Label', 
+                       font=('Helvetica', 10, 'bold'))
+        style.configure('Custom.Horizontal.TProgressbar', 
+                       troughcolor='#E0E0E0', 
+                       background='#4CAF50')
+
+        # Bind validation to all input fields
+        self.vehicles_var.trace_add('write', self.validate_all_fields)
+        self.time_var.trace_add('write', self.validate_all_fields)
+        self.solution_var.trace_add('write', self.validate_all_fields)
+
+    def update_solution_info(self, event=None):
+        selected = self.solution_var.get()
+        if selected in self.traffic_options:
+            info = self.traffic_options[selected]
+            info_text = (
+                f"Description: {info['description']}\n"
+                f"Implementation Cost: ₱{info['cost']:,.2f}\n"
+                f"Annual Maintenance: ₱{info['maintenance_cost']:,.2f}\n"
+                f"Average Wait Time: {info['wait_time']} seconds\n"
+                f"Efficiency Rating: {info['efficiency']*100}%"
+            )
+            self.info_text.config(state=tk.NORMAL)
+            self.info_text.delete(1.0, tk.END)
+            self.info_text.insert(tk.END, info_text)
+            self.info_text.config(state=tk.DISABLED)
+
+    def simulate_traffic(self, option, vehicles_per_minute, simulation_time):
+        total_vehicles = 0
+        wait_times = []
+        solution_info = self.traffic_options[option]
+        
+        base_efficiency = solution_info["efficiency"]
+        
+        for minute in range(simulation_time):
+            # Update progress bar
+            progress = (minute + 1) / simulation_time * 100
+            self.progress_var.set(progress)
+            self.root.update()
+            
+            sleep(0.1)  # Simulate real-time animation
+            
+            # Adjust efficiency based on peak hour
+            current_efficiency = base_efficiency
+            if self.peak_hour_var.get():
+                if 15 <= minute % 60 <= 45:  # Peak period simulation
+                    current_efficiency *= 0.7  # Reduced efficiency during peak
+            
+            passed_vehicles = vehicles_per_minute * current_efficiency
+            
+            # Add randomness to simulate real-world conditions
+            weather_factor = random.uniform(0.8, 1.2)
+            passed_vehicles *= weather_factor
+            
+            # Calculate wait time
+            base_wait_time = solution_info["wait_time"]
+            current_wait = base_wait_time * (vehicles_per_minute / passed_vehicles)
+            wait_times.append(current_wait)
+            
+            total_vehicles += max(0, passed_vehicles)
+
+        return int(total_vehicles), wait_times
+
+    def create_explanation_frame(self, parent, title, explanation):
+        """Create a collapsible explanation frame"""
+        frame = ttk.Frame(parent)
+        frame.pack(fill='x', pady=5)
+        
+        # Create a frame for the button with border
+        button_frame = ttk.Frame(frame, style='Explanation.TFrame')
+        button_frame.pack(fill='x')
+        
+        # Variable to track state
+        is_expanded = tk.BooleanVar(value=False)
+        
+        # Create explanation text widget (initially hidden)
+        text = tk.Text(frame, height=4, wrap=tk.WORD, font=('Helvetica', 9))
+        text.insert('1.0', explanation)
+        text.config(state='disabled')
+        
+        def toggle_explanation():
+            if is_expanded.get():
+                text.pack_forget()
+                btn.configure(text=f"{title} (Click to See Explanation) ▼")
+            else:
+                text.pack(fill='x', pady=(5,0))
+                btn.configure(text=f"{title} (Click to Hide Explanation) ▲")
+            is_expanded.set(not is_expanded.get())
+        
+        # Create button with title
+        btn = ttk.Button(button_frame, 
+                        text=f"{title} (Click to See Explanation) ▼",
+                        command=toggle_explanation,
+                        style='Explanation.TButton')
+        btn.pack(fill='x')
+        
+        return frame
+
+    def plot_results(self, wait_times):
+        # Clear previous results
+        for widget in self.results_frame.winfo_children():
+            widget.destroy()
+
+        # Create main frame for results
+        main_results_frame = ttk.Frame(self.results_frame)
+        main_results_frame.pack(fill='both', expand=True)
+
+        # Create figure with better dimensions for visibility
+        fig = plt.figure(figsize=(12, 8))
+        plt.subplots_adjust(hspace=0.5)
+
+        # Plot 1: Wait Times
+        ax1 = fig.add_subplot(311)
+        ax1.plot(wait_times, linewidth=2, color='#2196F3')
+        ax1.set_title('Wait Times During Simulation', pad=15, fontsize=12, fontweight='bold')
+        ax1.set_xlabel('Simulation Minute')
+        ax1.set_ylabel('Wait Time (seconds)')
+        ax1.grid(True, linestyle='--', alpha=0.7)
+        
+        wait_times_explanation = (
+            "This graph shows how wait times change during the simulation. "
+            "Lower wait times indicate better traffic flow. Spikes in the graph "
+            "may indicate congestion periods. The average wait time helps evaluate "
+            "the overall effectiveness of the chosen solution."
+        )
+
+        # Plot 2: Efficiency
+        ax2 = fig.add_subplot(312)
+        solutions = list(self.traffic_options.keys())
+        efficiencies = [self.traffic_options[s]["efficiency"]*100 for s in solutions]
+        bars = ax2.bar(solutions, efficiencies, color='#4CAF50')
+        ax2.set_title('Efficiency Comparison', pad=15, fontsize=12, fontweight='bold')
+        ax2.set_xlabel('Solutions')
+        ax2.set_ylabel('Efficiency (%)')
+        plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
+        ax2.grid(True, linestyle='--', alpha=0.7, axis='y')
+        
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            ax2.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{int(height)}%',
+                    ha='center', va='bottom')
+        
+        efficiency_explanation = (
+            "The efficiency comparison shows how well each solution handles traffic flow. "
+            "Higher percentages indicate better traffic management. Solutions above 100% "
+            "represent improvements over the baseline traffic flow. This helps identify "
+            "which solutions are most effective at reducing congestion."
+        )
+
+        # Plot 3: Cost
+        ax3 = fig.add_subplot(313)
+        costs = [self.traffic_options[s]["cost"] / 1000000 for s in solutions]
+        bars = ax3.bar(solutions, costs, color='#FF5722')
+        ax3.set_title('Implementation Cost Comparison', pad=15, fontsize=12, fontweight='bold')
+        ax3.set_xlabel('Solutions')
+        ax3.set_ylabel('Cost (Million ₱)')
+        plt.setp(ax3.xaxis.get_majorticklabels(), rotation=45, ha='right')
+        ax3.grid(True, linestyle='--', alpha=0.7, axis='y')
+        
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            ax3.text(bar.get_x() + bar.get_width()/2., height,
+                    f'₱{height:.1f}M',
+                    ha='center', va='bottom')
+        
+        cost_explanation = (
+            "This graph compares the implementation costs of different solutions. "
+            "Costs are shown in millions of Philippine Pesos (₱). Consider this alongside "
+            "efficiency and wait times to determine the most cost-effective solution. "
+            "Remember to factor in long-term maintenance costs for a complete analysis."
+        )
+
+        plt.tight_layout()
+        
+        # Create canvas with proper size
+        canvas_widget = FigureCanvasTkAgg(fig, master=main_results_frame)
+        canvas_widget.draw()
+        
+        # Make canvas expandable
+        canvas_widget.get_tk_widget().pack(fill='both', expand=True, padx=20, pady=10)
+
+        # Add explanation sections with dropdown buttons
+        explanations_frame = ttk.Frame(main_results_frame)
+        explanations_frame.pack(fill='x', padx=20, pady=10)
+
+        style = ttk.Style()
+        style.configure('Explanation.TButton', 
+                       font=('Helvetica', 10, 'bold'),
+                       padding=10)
+        style.configure('Explanation.TFrame', 
+                       relief='solid',
+                       borderwidth=1)
+
+        self.create_explanation_frame(explanations_frame, 
+                                   "Wait Times Analysis", 
+                                   wait_times_explanation)
+        
+        self.create_explanation_frame(explanations_frame, 
+                                   "Efficiency Analysis", 
+                                   efficiency_explanation)
+        
+        self.create_explanation_frame(explanations_frame, 
+                                   "Cost Analysis", 
+                                   cost_explanation)
+
+    def setup_intersection(self):
+        """Initialize the intersection layout"""
+        # Get canvas dimensions
+        w = self.canvas.winfo_reqwidth()
+        h = self.canvas.winfo_reqheight()
+        center_x = w // 2
+        center_y = h // 2
+        
+        # Draw roads
+        road_color = '#404040'
+        # Horizontal road
+        self.canvas.create_rectangle(0, center_y - self.road_width//2,
+                                   w, center_y + self.road_width//2,
+                                   fill=road_color, tags='road')
+        # Vertical road
+        self.canvas.create_rectangle(center_x - self.road_width//2, 0,
+                                   center_x + self.road_width//2, h,
+                                   fill=road_color, tags='road')
+        
+        # Draw lane markings
+        self.draw_lane_markings(w, h, center_x, center_y)
+        
+        # Store intersection properties
+        self.intersection = {
+            'center': (center_x, center_y),
+            'width': w,
+            'height': h
+        }
+
+    def draw_lane_markings(self, w, h, cx, cy):
+        """Draw road lane markings"""
+        # Lane marking properties
+        dash_length = 20
+        gap_length = 10
+        marking_color = 'white'
+        
+        # Horizontal markings
+        for x in range(0, w, dash_length + gap_length):
+            self.canvas.create_line(x, cy, x + dash_length, cy,
+                                  fill=marking_color, width=2)
+        
+        # Vertical markings
+        for y in range(0, h, dash_length + gap_length):
+            self.canvas.create_line(cx, y, cx, y + dash_length,
+                                  fill=marking_color, width=2)
+
+    def create_vehicle(self, direction):
+        """Create a new vehicle object"""
+        w = self.intersection['width']
+        h = self.intersection['height']
+        cx, cy = self.intersection['center']
+        
+        # Define starting positions based on direction
+        positions = {
+            'right': (0, cy - self.road_width//4),
+            'left': (w, cy + self.road_width//4),
+            'down': (cx + self.road_width//4, 0),
+            'up': (cx - self.road_width//4, h)
+        }
+        
+        x, y = positions[direction]
+        
+        # Create vehicle on canvas
+        vehicle = self.canvas.create_oval(
+            x - self.vehicle_size, y - self.vehicle_size,
+            x + self.vehicle_size, y + self.vehicle_size,
+            fill=self.get_random_color(),
+            tags=('vehicle', direction)
+        )
+        
+        return {'id': vehicle, 'direction': direction, 'pos': (x, y)}
+
+    def get_random_color(self):
+        """Generate a random color for vehicles"""
+        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD']
+        return random.choice(colors)
+
+    def toggle_pause(self):
+        """Toggle animation pause state"""
+        self.is_paused = not self.is_paused
+        if self.is_paused:
+            self.pause_btn.configure(text="Resume")
+            self.status_var.set("Simulation paused")
+        else:
+            self.pause_btn.configure(text="Pause")
+            self.status_var.set("Simulation running")
+            self.animate_vehicles()  # Resume animation
+
+    def animate_vehicles(self):
+        """Main animation loop"""
+        if not self.is_animating or self.is_paused:
+            return
+        
+        # Move existing vehicles
+        for vehicle in self.vehicles[:]:
+            moved = self.move_vehicle(vehicle)
+            if not moved:  # Vehicle is out of bounds
+                self.canvas.delete(vehicle['id'])
+                self.vehicles.remove(vehicle)
+        
+        # Randomly add new vehicles
+        if random.random() < 0.1:  # 10% chance each frame
+            direction = random.choice(['right', 'left', 'up', 'down'])
+            new_vehicle = self.create_vehicle(direction)
+            self.vehicles.append(new_vehicle)
+        
+        # Schedule next frame
+        speed = int(self.animation_speed / self.speed_var.get())
+        self.root.after(speed, self.animate_vehicles)
+
+    def move_vehicle(self, vehicle):
+        """Move a single vehicle"""
+        direction = vehicle['direction']
+        vehicle_id = vehicle['id']
+        
+        # Movement speeds
+        speeds = {
+            'right': (5, 0),
+            'left': (-5, 0),
+            'down': (0, 5),
+            'up': (0, -5)
+        }
+        
+        dx, dy = speeds[direction]
+        
+        # Apply movement
+        self.canvas.move(vehicle_id, dx, dy)
+        
+        # Get new position
+        pos = self.canvas.coords(vehicle_id)
+        
+        # Check if vehicle is still in bounds
+        if pos[0] < -20 or pos[0] > self.intersection['width'] + 20 or \
+           pos[1] < -20 or pos[1] > self.intersection['height'] + 20:
+            return False
+        
+        return True
+
+    def start_simulation(self):
+        try:
+            # Input validation
+            if self.solution_var.get() == "Select an option":
+                messagebox.showerror("Error", "Please select a traffic solution!")
+                return
+
+            vehicles = int(self.vehicles_var.get())
+            sim_time = int(self.time_var.get())
+
+            if vehicles <= 0 or sim_time <= 0:
+                messagebox.showerror("Error", "Please enter positive numbers!")
+                return
+
+            # Reset any existing simulation
+            self.stop_simulation()
+            self.replay_btn.pack_forget()
+            
+            # Clear previous results
+            self.result_var.set("")
+            for widget in self.results_frame.winfo_children():
+                widget.destroy()
+            
+            # Reset progress bar
+            self.progress_var.set(0)
+            self.result_var.set("Simulation in progress...")
+            self.root.update()
+
+            # Run simulation
+            total, wait_times = self.simulate_traffic(self.solution_var.get(), 
+                                                    vehicles, sim_time)
+            
+            # Display results
+            avg_wait = sum(wait_times) / len(wait_times)
+            solution_info = self.traffic_options[self.solution_var.get()]
+            
+            # Calculate yearly operating cost (maintenance + estimated power/resource costs)
+            yearly_cost = solution_info['maintenance_cost']
+            
+            self.result_var.set(
+                f"SIMULATION RESULTS\n" +
+                f"==================\n" +
+                f"Solution: {self.solution_var.get()}\n" +
+                f"Total vehicles processed: {total:,}\n" +
+                f"Average wait time: {avg_wait:.1f} seconds\n\n" +
+                f"COST ANALYSIS\n" +
+                f"==================\n" +
+                f"Implementation cost: ₱{solution_info['cost']:,.2f}\n" +
+                f"Yearly maintenance: ₱{yearly_cost:,.2f}\n" +
+                f"5-year total cost: ₱{(solution_info['cost'] + yearly_cost * 5):,.2f}"
+            )
+            
+            # Show detailed results in Results tab
+            self.plot_results(wait_times)
+            self.notebook.select(1)  # Switch to Results tab
+
+            # Enable control buttons and start animation
+            self.pause_btn.configure(state='normal')
+            self.stop_btn.configure(state='normal')
+            self.is_paused = False
+            self.is_animating = True
+            self.status_var.set("Simulation running")
+            self.animate_vehicles()
+
+        except ValueError:
+            messagebox.showerror("Error", 
+                               "Please enter valid numbers for vehicles and time!")
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
+
+    def validate_all_fields(self, *args):
+        """Check if all required fields are filled"""
+        vehicles = self.vehicles_var.get().strip()
+        sim_time = self.time_var.get().strip()
+        solution = self.solution_var.get()
+        
+        # Check if all fields are filled and valid
+        if (vehicles and sim_time and 
+            solution != "Select an option" and 
+            vehicles.isdigit() and sim_time.isdigit() and
+            int(vehicles) > 0 and int(sim_time) > 0):
+            # Hide replay button when inputs change
+            self.replay_btn.pack_forget()
+            self.replay_btn.configure(state='disabled')
+            self.simulate_btn.pack(pady=5)    # Show start button
+        else:
+            # Hide simulation button
+            self.simulate_btn.pack_forget()
+
+    def stop_simulation(self):
+        """Stop the animation and reset"""
+        self.is_animating = False
+        self.is_paused = False
+        
+        # Clear all vehicles
+        for vehicle in self.vehicles:
+            self.canvas.delete(vehicle['id'])
+        self.vehicles.clear()
+        
+        # Reset controls
+        self.pause_btn.configure(text="Pause", state='disabled')
+        self.stop_btn.configure(state='disabled')
+        self.status_var.set("Simulation stopped")
+        
+        # Reset progress bar
+        self.progress_var.set(0)
+        
+        # Show replay button if inputs are valid
+        if (self.vehicles_var.get().strip() and 
+            self.time_var.get().strip() and 
+            self.solution_var.get() != "Select an option"):
+            self.replay_btn.pack(side='left', padx=5)
+            self.replay_btn.configure(state='normal')
+
+    def replay_simulation(self):
+        """Restart the simulation with same parameters"""
+        self.replay_btn.pack_forget()  # Hide replay button
+        self.replay_btn.configure(state='disabled')
+        self.start_simulation()        # Start simulation again
+
+    def on_closing(self):
+        """Handle window closing"""
+        if messagebox.askokcancel("Quit", "Do you want to quit the application?"):
+            self.root.destroy()
+
+def main():
+    root = tk.Tk()
+    app = TrafficSimulator(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
